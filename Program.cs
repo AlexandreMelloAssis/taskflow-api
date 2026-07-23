@@ -11,8 +11,20 @@ builder.Services.AddSwaggerGen(options =>
     options.SwaggerDoc("v1", new() { Title = "TaskFlow API", Version = "v1" });
 });
 
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var provider = builder.Configuration["Database:Provider"] ?? "Sqlite";
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    if (provider.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
+    {
+        options.UseNpgsql(connectionString);
+    }
+    else
+    {
+        options.UseSqlite(connectionString);
+    }
+});
 
 builder.Services.AddScoped<ITaskRepository, TaskRepository>();
 
@@ -35,3 +47,6 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+// Exposed for WebApplicationFactory-based integration tests.
+public partial class Program { }

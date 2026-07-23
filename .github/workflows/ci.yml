@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore API
+        run: dotnet restore TaskFlow.Api.csproj
+
+      - name: Build API
+        run: dotnet build TaskFlow.Api.csproj --no-restore --configuration Release
+
+      - name: Restore tests
+        run: dotnet restore tests/TaskFlow.Api.Tests/TaskFlow.Api.Tests.csproj
+
+      - name: Run tests
+        run: dotnet test tests/TaskFlow.Api.Tests/TaskFlow.Api.Tests.csproj --no-restore --configuration Release

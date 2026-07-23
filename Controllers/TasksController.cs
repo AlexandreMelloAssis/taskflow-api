@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using TaskFlow.Api.Domain;
+using TaskFlow.Api.Domain.Events;
 using TaskFlow.Api.DTOs;
+using TaskFlow.Api.Infrastructure.Messaging;
 
 namespace TaskFlow.Api.Controllers;
 
@@ -9,10 +11,12 @@ namespace TaskFlow.Api.Controllers;
 public class TasksController : ControllerBase
 {
     private readonly ITaskRepository _repository;
+    private readonly IEventPublisher _eventPublisher;
 
-    public TasksController(ITaskRepository repository)
+    public TasksController(ITaskRepository repository, IEventPublisher eventPublisher)
     {
         _repository = repository;
+        _eventPublisher = eventPublisher;
     }
 
     [HttpGet]
@@ -44,6 +48,11 @@ public class TasksController : ControllerBase
         };
 
         var created = await _repository.CreateAsync(task);
+
+        _eventPublisher.Publish(
+            "task.created",
+            new TaskCreatedEvent(created.Id, created.Title, created.CreatedAt));
+
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, TaskDto.FromEntity(created));
     }
 
@@ -51,7 +60,23 @@ public class TasksController : ControllerBase
     public async Task<IActionResult> UpdateStatus(Guid id, UpdateTaskStatusDto dto)
     {
         var updated = await _repository.UpdateStatusAsync(id, dto.Status);
-        return updated ? NoContent() : NotFound();
+        if (!updated)
+        {
+            return NotFound();
+        }
+
+        if (dto.Status == TaskItemStatus.Done)
+        {
+            var task = await _repository.GetByIdAsync(id);
+            if (task is not null)
+            {
+                _eventPublisher.Publish(
+                    "task.completed",
+                    new TaskCompletedEvent(task.Id, task.Title, task.CompletedAt ?? DateTime.UtcNow));
+            }
+        }
+
+        return NoContent();
     }
 
     [HttpDelete("{id:guid}")]

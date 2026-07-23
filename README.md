@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/AlexandreMelloAssis/taskflow-api/actions/workflows/ci.yml/badge.svg)
 
-A lightweight task-management REST API built with **.NET 8** to demonstrate Clean Architecture principles, repository pattern, and DTO-based API design.
+A lightweight task-management REST API built with **.NET 8** to demonstrate Clean Architecture principles, repository pattern, DTO-based API design, and event-driven integration.
 
 ## Overview
 
@@ -10,16 +10,16 @@ TaskFlow exposes CRUD endpoints for managing tasks (create, list, update status,
 
 ```
 TaskFlow.Api/
-├── Controllers/       # HTTP endpoints (thin, delegate to controller/repository)
-├── Domain/            # Entities and repository contracts (no external dependencies)
-├── Infrastructure/    # EF Core DbContext + repository implementation
+├── Controllers/       # HTTP endpoints (thin, delegate to repository/messaging)
+├── Domain/            # Entities, repository contracts, domain events
+├── Infrastructure/    # EF Core DbContext + repository + RabbitMQ event publisher
 ├── DTOs/              # Request/response contracts, decoupled from domain entities
 ├── Program.cs         # Composition root / DI wiring
 └── appsettings.json
 
 tests/TaskFlow.Api.Tests/
 ├── TaskRepositoryTests.cs     # Repository behavior against EF Core InMemory
-└── TasksControllerTests.cs    # Controller behavior against a fake repository
+└── TasksControllerTests.cs    # Controller behavior + event publishing, against fakes
 ```
 
 ## Tech stack
@@ -27,6 +27,7 @@ tests/TaskFlow.Api.Tests/
 - C# / .NET 8
 - ASP.NET Core Web API
 - Entity Framework Core — **SQLite** for local dev, **PostgreSQL** in Docker (swappable via config)
+- RabbitMQ — publishes domain events (`task.created`, `task.completed`) for downstream consumers
 - Swagger / OpenAPI for interactive docs
 - xUnit + EF Core InMemory for unit tests
 - Docker + Docker Compose
@@ -37,24 +38,36 @@ tests/TaskFlow.Api.Tests/
 - **Domain isolation**: `Domain/` has zero dependencies on EF Core or ASP.NET — entities and the `ITaskRepository` contract are plain C#.
 - **DTOs at the boundary**: controllers never expose domain entities directly; `CreateTaskDto` / `TaskDto` shape what crosses the wire.
 - **Swap-friendly persistence**: the EF Core provider is chosen at startup based on `Database:Provider` in configuration (`Sqlite` locally, `Postgres` in Docker) — controllers and domain logic never change.
-- **Tested at two levels**: repository tests run against a real `DbContext` (EF Core InMemory) to catch mapping/behavior issues; controller tests use a fake repository to isolate HTTP-layer logic (validation, status codes).
+- **Messaging as a side-channel, not a dependency**: `RabbitMqEventPublisher` connects lazily and swallows connection/publish failures (logging a warning instead). If RabbitMQ is down, task CRUD still works — the API's core responsibility never depends on the broker being up.
+- **Tested at two levels**: repository tests run against a real `DbContext` (EF Core InMemory) to catch mapping/behavior issues; controller tests use fakes for both the repository and the event publisher to isolate HTTP-layer logic (validation, status codes, and which events get published when).
 
-## Running locally (SQLite, no Docker)
+## Event-driven integration
+
+On task creation and completion, the API publishes a message to a `taskflow.events` topic exchange in RabbitMQ:
+
+| Routing key       | Event               | Published when              |
+|--------------------|---------------------|------------------------------|
+| `task.created`     | `TaskCreatedEvent`   | A task is successfully created |
+| `task.completed`   | `TaskCompletedEvent` | A task's status is set to `Done` |
+
+[taskflow-notifier](https://github.com/AlexandreMelloAssis/taskflow-notifier) is a separate worker service that subscribes to these events — demonstrating that other services can react to what happens in TaskFlow without the API knowing or caring who's listening.
+
+## Running locally (SQLite, no Docker, no RabbitMQ)
 
 ```bash
 dotnet restore
 dotnet run --project TaskFlow.Api.csproj
 ```
 
-Swagger UI will be available at `https://localhost:5001/swagger`.
+Swagger UI will be available at `https://localhost:5001/swagger`. Task CRUD works fully without RabbitMQ running; you'll just see warnings logged when events can't be published.
 
-## Running with Docker Compose (API + PostgreSQL)
+## Running with Docker Compose (API + PostgreSQL + RabbitMQ)
 
 ```bash
 docker compose up --build
 ```
 
-This starts the API on `http://localhost:8080` backed by a PostgreSQL container (`db`), with a named volume so data survives restarts.
+This starts the API on `http://localhost:8080`, PostgreSQL (`db`), and RabbitMQ (`rabbitmq`, management UI at `http://localhost:15672`, guest/guest).
 
 ## Running tests
 
@@ -74,9 +87,10 @@ CI runs this same command on every push and pull request to `main` (see `.github
 | PUT    | /api/tasks/{id}/status  | Update a task's status   |
 | DELETE | /api/tasks/{id}         | Delete a task            |
 
-## Related project
+## Related projects
 
-[taskflow-web](https://github.com/AlexandreMelloAssis/taskflow-web) — Angular 17 front end that consumes this API.
+- [taskflow-web](https://github.com/AlexandreMelloAssis/taskflow-web) — Angular 17 front end that consumes this API.
+- [taskflow-notifier](https://github.com/AlexandreMelloAssis/taskflow-notifier) — .NET worker service that consumes this API's RabbitMQ events.
 
 ## Possible next steps
 
